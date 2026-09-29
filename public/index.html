@@ -1,0 +1,231 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RetailAI V1</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>RetailAI</h1>
+    <p>Smart retail, simple business.</p>
+  </div>
+  <nav>
+    <button onclick="view('store')">Customer Store</button>
+    <button onclick="view('dash')">Retailer Dashboard</button>
+  </nav>
+</header>
+
+<main>
+<section id="store">
+  <h2>Customer Store</h2>
+  <div id="products" class="grid"></div>
+
+  <div class="card">
+    <h2>Cart</h2>
+    <div id="cart">Empty</div>
+    <b>Total ₹<span id="total">0</span></b>
+    <button onclick="order()">Place Order</button>
+  </div>
+</section>
+
+<section id="dash" hidden>
+  <div class="stats">
+    <div class="card">Products <b id="pc">0</b></div>
+    <div class="card">Orders <b id="oc">0</b></div>
+    <div class="card">Sales ₹<b id="sales">0</b></div>
+    <div class="card">Low Stock <b id="low">0</b></div>
+  </div>
+
+  <div class="card">
+    <h2>Add Product</h2>
+    <form id="form">
+      <input id="name" placeholder="Product name" required>
+      <input id="price" type="number" placeholder="Price" required>
+      <input id="stock" type="number" placeholder="Stock" required>
+      <input id="cat" placeholder="Category">
+      <button>Add</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Products</h2>
+    <div id="table"></div>
+  </div>
+
+  <div class="card">
+    <h2>Orders</h2>
+    <div id="orders"></div>
+  </div>
+</section>
+</main>
+
+<script>
+let P=[],O=[],C=[];
+
+async function api(u,o){
+  let r=await fetch(u,{
+    headers:{"Content-Type":"application/json"},
+    ...o
+  });
+  let d=await r.json();
+  if(!r.ok) throw Error(d.error);
+  return d;
+}
+
+function view(x){
+  store.hidden=x!=="store";
+  dash.hidden=x!=="dash";
+  if(x==="dash") load();
+}
+
+function esc(x){
+  return String(x).replace(/[&<>"']/g,c=>({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    '"':"&quot;",
+    "'":"&#39;"
+  }[c]));
+}
+
+async function load(){
+  P=await api("/api/products");
+  O=await api("/api/orders");
+  render();
+  stats();
+}
+
+function render(){
+  products.innerHTML=P.map(p=>`
+    <div class="card">
+      <small>${esc(p.category)}</small>
+      <h3>${esc(p.name)}</h3>
+      <h2>₹${p.price}</h2>
+      <p>${p.stock} stock</p>
+      <button ${!p.stock?"disabled":""} onclick="add(${p.id})">
+        Add to Cart
+      </button>
+    </div>
+  `).join("");
+
+  table.innerHTML=P.map(p=>`
+    <div class="row">
+      <span>${esc(p.name)}</span>
+      <span>₹${p.price}</span>
+      <span>${p.stock}</span>
+      <button onclick="del(${p.id})">Delete</button>
+    </div>
+  `).join("");
+
+  orders.innerHTML=O.map(o=>`
+    <div class="row">
+      <span>#${o.id}<br>${esc(o.customerName)}</span>
+      <b>₹${o.total}</b>
+      <select onchange="status(${o.id},this.value)">
+        ${["New","Confirmed","Packed","Delivered","Cancelled"]
+        .map(s=>`<option ${o.status===s?"selected":""}>${s}</option>`).join("")}
+      </select>
+    </div>
+  `).join("");
+
+  cart.innerHTML=C.length
+    ? C.map(i=>{
+        let p=P.find(x=>x.id===i.productId);
+        return `<div class="row">
+          ${esc(p.name)} × ${i.qty}
+          <b>₹${p.price*i.qty}</b>
+        </div>`;
+      }).join("")
+    : "Empty";
+
+  total.textContent=C.reduce(
+    (a,i)=>a+(P.find(p=>p.id===i.productId)?.price||0)*i.qty,
+    0
+  );
+}
+
+function stats(){
+  pc.textContent=P.length;
+  oc.textContent=O.length;
+  sales.textContent=O
+    .filter(x=>x.status!=="Cancelled")
+    .reduce((a,x)=>a+x.total,0);
+  low.textContent=P.filter(x=>x.stock<5).length;
+}
+
+function add(id){
+  let x=C.find(i=>i.productId===id);
+  x ? x.qty++ : C.push({productId:id,qty:1});
+  render();
+}
+
+async function order(){
+  if(!C.length) return alert("Cart empty");
+
+  let n=prompt("Customer name?");
+  if(!n) return;
+
+  let phone=prompt("Mobile (optional)?")||"";
+
+  try{
+    await api("/api/orders",{
+      method:"POST",
+      body:JSON.stringify({
+        customerName:n,
+        phone,
+        items:C
+      })
+    });
+
+    C=[];
+    await load();
+    alert("Order placed");
+  }catch(e){
+    alert(e.message);
+  }
+}
+
+async function del(id){
+  if(confirm("Delete?")){
+    await api("/api/products/"+id,{method:"DELETE"});
+    load();
+  }
+}
+
+async function status(id,s){
+  await api("/api/orders/"+id,{
+    method:"PATCH",
+    body:JSON.stringify({status:s})
+  });
+  load();
+}
+
+form.onsubmit=async e=>{
+  e.preventDefault();
+
+  try{
+    await api("/api/products",{
+      method:"POST",
+      body:JSON.stringify({
+        name:name.value,
+        price:price.value,
+        stock:stock.value,
+        category:cat.value
+      })
+    });
+
+    form.reset();
+    load();
+  }catch(x){
+    alert(x.message);
+  }
+}
+
+load();
+</script>
+
+</body>
+</html>
